@@ -1,0 +1,113 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --page-bg: #f4efe6;
+    --panel-bg: rgba(255, 255, 255, 0.82);
+    --panel-border: rgba(70, 56, 41, 0.12);
+    --text-main: #23180f;
+    --text-muted: #6f6255;
+    --accent: #b85c38;
+    --accent-strong: #8e3f1f;
+    --ok: #2f6f4f;
+    --warn: #a55f17;
+    --danger: #8f3d3d;
+}
+
+html,
+body,
+#app {
+    min-height: 100%;
+}
+
+body {
+    background:
+        radial-gradient(circle at top left, rgba(184, 92, 56, 0.24), transparent 32%),
+        radial-gradient(circle at top right, rgba(63, 111, 79, 0.18), transparent 26%),
+        linear-gradient(180deg, #fcf8f2 0%, var(--page-bg) 100%);
+    color: var(--text-main);
+}
+
+.documents-grid .ag-row-selected {
+    background-color: #f6d7c8 !important;
+    box-shadow: inset 3px 0 0 #b85c38;
+}
+
+.documents-grid .ag-row-selected.ag-row-hover {
+    background-color: #efc3ad !important;
+}
+
+.documents-grid .ag-row-selected .ag-cell {
+    background-color: transparent !important;
+}
+
+/* Legacy browsers (Win7/old Chrome): use native container scrollbars instead of AG internal scrollbar layer */
+.legacy-grid-scrollbars {
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    -ms-overflow-style: scrollbar !important;
+    scrollbar-width: auto !important;
+}
+
+.legacy-grid-scrollbars::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.legacy-grid-scrollbars::-webkit-scrollbar-thumb {
+    background: #8b8176;
+    border-radius: 8px;
+    border: 2px solid #ede6dc;
+}
+
+.legacy-grid-scrollbars::-webkit-scrollbar-track {
+    background: #ede6dc;
+}
+
+.legacy-grid-scrollbars .ag-root-wrapper,
+.legacy-grid-scrollbars .ag-root,
+.legacy-grid-scrollbars .ag-root-wrapper-body {
+    min-width: 100%;
+}
+
+/* Windows 7 fallback: force AG Grid scrollbars visible in document table area */
+.win7-grid-scrollbars {
+    --ag-scrollbar-size: 16px !important;
+}
+
+.win7-grid-scrollbars .ag-body-horizontal-scroll,
+.win7-grid-scrollbars .ag-body-vertical-scroll {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+}
+
+/* Force native scrollbars on Win7 for AG Grid viewport */
+.win7-grid-scrollbars .ag-body-viewport,
+.win7-grid-scrollbars .ag-center-cols-viewport {
+    overflow-y: auto !important;
+    overflow-x: auto !important;
+    -ms-overflow-style: auto !important;
+    scrollbar-width: auto !important;
+}
+
+.win7-grid-scrollbars .ag-body-viewport::-webkit-scrollbar,
+.win7-grid-scrollbars .ag-center-cols-viewport::-webkit-scrollbar {
+    width: 14px !important;
+    height: 14px !important;
+    display: block !important;
+}
+
+.win7-grid-scrollbars .ag-body-viewport::-webkit-scrollbar-thumb,
+.win7-grid-scrollbars .ag-center-cols-viewport::-webkit-scrollbar-thumb {
+    background: #8b8176;
+    border-radius: 8px;
+    border: 2px solid #ede6dc;
+}
+
+.win7-grid-scrollbars .ag-body-viewport::-webkit-scrollbar-track,
+.win7-grid-scrollbars .ag-center-cols-viewport::-webkit-scrollbar-track {
+    background: #ede6dc;
+}
