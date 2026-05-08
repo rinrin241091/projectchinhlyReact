@@ -47,7 +47,7 @@ class AuthenticatedSessionController extends Controller
         $user = $request->user();
         $normalizedRole = $this->normalizeRole($user?->role);
         $target = route('dashboard', absolute: false);
-        if ($normalizedRole === 'admin') {
+        if ($normalizedRole === 'admin' || $normalizedRole === 'super_admin') {
             $target = route('admin.dashboard', absolute: false);
         }
         if ($normalizedRole === 'nhap_lieu') {

@@ -21,7 +21,7 @@ class EnsureRole
 
     private function redirectByRole(string $normalizedRole): ?string
     {
-        if ($normalizedRole === 'admin') {
+        if ($normalizedRole === 'admin' || $normalizedRole === 'super_admin') {
             return route('admin.dashboard');
         }
 

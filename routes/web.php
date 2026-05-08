@@ -56,7 +56,7 @@ Route::middleware(['auth'])
     ->prefix('admin')
     ->name('admin.')
     ->group(function () {
-        Route::middleware('role:admin')->group(function () {
+        Route::middleware('role:admin,super_admin')->group(function () {
             Route::get('/', function () {
                 $today = now()->toDateString();
                 $onlineUsers = User::query()
@@ -157,7 +157,7 @@ Route::middleware(['auth'])
             Route::get('productivity/export', [ProductivityController::class, 'export'])->name('productivity.export');
         });
 
-        Route::middleware('role:admin,nhap_lieu')->group(function () {
+        Route::middleware('role:admin,super_admin,nhap_lieu')->group(function () {
             Route::post('organization-filter', function (Request $request) {
                 $organizationId = $request->input('organization_id');
                 if ($organizationId) {

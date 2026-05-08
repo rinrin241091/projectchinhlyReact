@@ -20,6 +20,10 @@ export default defineConfig(({ mode }) => {
             port: Number.isNaN(devServerPort) ? 5173 : devServerPort,
             strictPort: true,
             origin: `http://${devServerHost}:${Number.isNaN(devServerPort) ? 5173 : devServerPort}`,
+            cors: {
+                origin: ['http://localhost:8000', 'http://127.0.0.1:8000'],
+                credentials: true,
+            },
             hmr: {
                 host: devServerHost,
                 port: Number.isNaN(devServerPort) ? 5173 : devServerPort,
