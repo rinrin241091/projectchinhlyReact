@@ -40,6 +40,7 @@ export default function Index({ rows, docTypes, archiveRecords, items, organizat
     const [selectedRowIds, setSelectedRowIds] = useState([]);
     const gridApiRef = useRef(null);
     const importInputRef = useRef(null);
+    const importRecordInputRef = useRef(null);
     const contextMenuRef = useRef(null);
     const recordListRef = useRef(null);
     const win7ScrollbarObserverRef = useRef(null);
@@ -1758,6 +1759,15 @@ export default function Index({ rows, docTypes, archiveRecords, items, organizat
         window.location.href = `/admin/documents/export-dang-record?record_id=${recordId}`;
     };
 
+    const onExportRecord = () => {
+        if (!selectedRecordId) {
+            alert('Vui lòng chọn hồ sơ ở danh sách bên trái trước khi xuất.');
+            return;
+        }
+        const recordId = encodeURIComponent(String(selectedRecordId));
+        window.location.href = `/admin/documents/export-record?record_id=${recordId}`;
+    };
+
     const onOpenImportDang = () => {
         if (!selectedRecordId) {
             alert('Vui lòng chọn hồ sơ ở danh sách bên trái trước khi import.');
@@ -1814,6 +1824,62 @@ export default function Index({ rows, docTypes, archiveRecords, items, organizat
         } finally {
             if (importInputRef.current) {
                 importInputRef.current.value = '';
+            }
+        }
+    };
+
+    const onOpenImportRecord = () => {
+        if (!selectedRecordId) {
+            alert('Vui lòng chọn hồ sơ ở danh sách bên trái trước khi import.');
+            return;
+        }
+        if (!defaultDocTypeId) {
+            alert('Chưa có loại văn bản. Vui lòng tạo Loại văn bản trước.');
+            return;
+        }
+        if (importRecordInputRef.current) {
+            importRecordInputRef.current.value = '';
+            importRecordInputRef.current.click();
+        }
+    };
+
+    const onImportRecord = async (event) => {
+        const file = event?.target?.files?.[0];
+        if (!file || !selectedRecordId) {
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('archive_record_id', String(selectedRecordId));
+        formData.append('file', file);
+
+        try {
+            const response = await window.axios.post('/admin/documents/import-record', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+
+            const importedRows = Array.isArray(response?.data?.rows) ? response.data.rows : [];
+            if (importedRows.length > 0) {
+                setAllRows((current) => sortDocumentRows([...current, ...importedRows]));
+                const last = importedRows[importedRows.length - 1];
+                if (last?.id) {
+                    setActiveRowId(last.id);
+                    focusDocumentRow(last.id);
+                }
+            }
+
+            alert(`Đã import ${response?.data?.count ?? importedRows.length} tài liệu.`);
+        } catch (error) {
+            const message =
+                error?.response?.data?.message ||
+                Object.values(error?.response?.data?.errors ?? {})
+                    .flat()
+                    .join('\n') ||
+                'Import thất bại. Vui lòng thử lại.';
+            alert(message);
+        } finally {
+            if (importRecordInputRef.current) {
+                importRecordInputRef.current.value = '';
             }
         }
     };
@@ -2111,6 +2177,29 @@ export default function Index({ rows, docTypes, archiveRecords, items, organizat
                                     </button>
                                 </>
                             )}
+                            <input
+                                ref={importRecordInputRef}
+                                type="file"
+                                accept=".xlsx,.xls"
+                                className="hidden"
+                                onChange={onImportRecord}
+                            />
+                            <button
+                                type="button"
+                                onClick={onOpenImportRecord}
+                                disabled={!selectedRecordId}
+                                className="rounded-full border border-stone-300 bg-white px-5 py-2 text-sm font-semibold text-[var(--text-main)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                Import
+                            </button>
+                            <button
+                                type="button"
+                                onClick={onExportRecord}
+                                disabled={!selectedRecordId}
+                                className="rounded-full border border-stone-300 bg-white px-5 py-2 text-sm font-semibold text-[var(--text-main)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                Xuất Excel
+                            </button>
                             <button
                                 type="button"
                                 onClick={onAddRow}

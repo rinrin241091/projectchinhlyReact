@@ -152,6 +152,7 @@ Route::middleware(['auth'])
 
             Route::get('documents/export-dang', [DocumentController::class, 'exportDang'])->name('documents.export-dang');
             Route::get('documents/export-dang-record', [DocumentController::class, 'exportDangRecord'])->name('documents.export-dang-record');
+            Route::get('documents/export-record', [DocumentController::class, 'exportRecord'])->name('documents.export-record');
 
             Route::get('productivity', [ProductivityController::class, 'index'])->name('productivity.index');
             Route::get('productivity/export', [ProductivityController::class, 'export'])->name('productivity.export');
@@ -172,6 +173,7 @@ Route::middleware(['auth'])
             Route::get('documents/rows', [DocumentController::class, 'rows'])->name('documents.rows');
             Route::post('documents', [DocumentController::class, 'store'])->name('documents.store');
             Route::post('documents/import-dang', [DocumentController::class, 'importDang'])->name('documents.import-dang');
+            Route::post('documents/import-record', [DocumentController::class, 'importRecord'])->name('documents.import-record');
             Route::patch('documents/{document}', [DocumentController::class, 'update'])->name('documents.update');
             Route::delete('documents/{document}', [DocumentController::class, 'destroy'])->name('documents.destroy');
         });

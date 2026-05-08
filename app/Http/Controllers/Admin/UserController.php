@@ -30,7 +30,7 @@ class UserController extends Controller
     {
         $normalized = $this->normalizeRole($role);
 
-        return in_array($normalized, ['admin', 'user', 'nhap_lieu'], true)
+        return in_array($normalized, ['admin', 'super_admin', 'user', 'nhap_lieu'], true)
             ? $normalized
             : 'user';
     }
@@ -73,15 +73,18 @@ class UserController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
-            'role' => ['required', Rule::in(['admin', 'user', 'nhap_lieu'])],
+            'role' => ['required', Rule::in(['admin', 'super_admin', 'user', 'nhap_lieu'])],
         ]);
+
+        $role = $this->canonicalRole($data['role']);
 
         User::create([
             'name' => $data['name'],
             'email' => $data['email'],
             'password' => Hash::make($data['password']),
-            'role' => $this->canonicalRole($data['role']),
+            'role' => $role,
             'must_change_password' => true,
+            'email_verified_at' => in_array($role, ['admin', 'super_admin'], true) ? now() : null,
         ]);
 
         return redirect()->route('admin.users.index');
@@ -105,12 +108,16 @@ class UserController extends Controller
                 Rule::unique('users', 'email')->ignore($user->id),
             ],
             'password' => ['nullable', 'string', 'min:8'],
-            'role' => ['required', Rule::in(['admin', 'user', 'nhap_lieu'])],
+            'role' => ['required', Rule::in(['admin', 'super_admin', 'user', 'nhap_lieu'])],
         ]);
 
         $user->name = $data['name'];
         $user->email = $data['email'];
         $user->role = $this->canonicalRole($data['role']);
+
+        if (in_array($user->role, ['admin', 'super_admin'], true) && ! $user->email_verified_at) {
+            $user->email_verified_at = now();
+        }
 
         if (! empty($data['password'])) {
             $user->password = Hash::make($data['password']);

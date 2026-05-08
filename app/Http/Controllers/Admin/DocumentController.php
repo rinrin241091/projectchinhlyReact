@@ -488,7 +488,7 @@ class DocumentController extends Controller
             ->trim('_')
             ->toString();
 
-        if ($normalizedRole === 'admin') {
+        if ($normalizedRole === 'admin' || $normalizedRole === 'super_admin') {
             return;
         }
 
@@ -1244,6 +1244,310 @@ class DocumentController extends Controller
         } catch (\Throwable) {
             return (string) $value;
         }
+    }
+
+    public function exportRecord(Request $request): BinaryFileResponse
+    {
+        $selectedOrganizationId = $request->session()->get('admin.organization_id');
+        abort_unless($selectedOrganizationId, 422, 'Vui lòng chọn phông trước khi xuất file.');
+
+        $validated = $request->validate([
+            'record_id' => ['required', 'integer', 'exists:archive_records,id'],
+        ]);
+
+        $record = ArchiveRecord::query()
+            ->join('archive_record_items', 'archive_record_items.id', '=', 'archive_records.archive_record_item_id')
+            ->where('archive_records.id', (int) $validated['record_id'])
+            ->where('archive_record_items.organization_id', (int) $selectedOrganizationId)
+            ->select(['archive_records.id', 'archive_records.code', 'archive_records.reference_code', 'archive_records.title'])
+            ->first();
+
+        abort_unless($record, 404, 'Không tìm thấy hồ sơ thuộc phông đang chọn.');
+
+        $documents = Document::query()
+            ->where('archive_record_id', (int) $record->id)
+            ->orderByRaw('COALESCE(stt, 999999), id')
+            ->get();
+
+        $tempDir = storage_path('app/tmp/document-exports/' . Str::uuid());
+        File::ensureDirectoryExists($tempDir);
+
+        $recordCode = trim((string) ($record->code ?? $record->reference_code ?? ''));
+        $safeCode = preg_replace('/[\\\\\\/:*?"<>|]+/u', '_', $recordCode) ?: 'Ho-so';
+        $safeTitle = preg_replace('/[\\\\\\/:*?"<>|]+/u', '_', trim((string) ($record->title ?? ''))) ?: 'Ho-so';
+        $fileName = "{$safeCode}_{$safeTitle}.xlsx";
+        $xlsxPath = $tempDir . DIRECTORY_SEPARATOR . $fileName;
+
+        $this->buildGenericWorkbook($record, $documents, $xlsxPath);
+
+        app()->terminating(function () use ($tempDir): void {
+            if (is_dir($tempDir)) {
+                File::deleteDirectory($tempDir);
+            }
+        });
+
+        return response()->download($xlsxPath, $fileName)->deleteFileAfterSend(true);
+    }
+
+    public function importRecord(Request $request): JsonResponse
+    {
+        $selectedOrganizationId = $request->session()->get('admin.organization_id');
+        abort_unless($selectedOrganizationId, 422, 'Vui lòng chọn phông trước khi import file.');
+
+        $validated = $request->validate([
+            'archive_record_id' => ['required', 'integer', 'exists:archive_records,id'],
+            'file' => ['required', 'file', 'mimes:xlsx,xls'],
+        ]);
+
+        $record = ArchiveRecord::query()
+            ->join('archive_record_items', 'archive_record_items.id', '=', 'archive_records.archive_record_item_id')
+            ->where('archive_records.id', (int) $validated['archive_record_id'])
+            ->where('archive_record_items.organization_id', (int) $selectedOrganizationId)
+            ->select(['archive_records.id'])
+            ->first();
+
+        abort_unless($record, 404, 'Không tìm thấy hồ sơ thuộc phông đang chọn.');
+
+        $defaultDocTypeId = DocType::query()->value('id');
+        if (! $defaultDocTypeId) {
+            throw ValidationException::withMessages([
+                'file' => 'Chưa có loại văn bản. Vui lòng tạo ít nhất 1 loại văn bản trước khi import.',
+            ]);
+        }
+
+        $spreadsheet = IOFactory::load($validated['file']->getRealPath());
+        $sheet = $spreadsheet->getSheet(0);
+
+        // Detect header row by looking for STT column
+        $headerRow = null;
+        $columnMap = [];
+        $highestRow = min($sheet->getHighestDataRow(), 50);
+
+        for ($r = 1; $r <= $highestRow; $r++) {
+            $rowMap = [];
+            $highestCol = Coordinate::columnIndexFromString($sheet->getHighestDataColumn());
+            for ($c = 1; $c <= $highestCol; $c++) {
+                $raw = (string) $sheet->getCell([$c, $r])->getFormattedValue();
+                $norm = $this->normalizeGenericHeader($raw);
+                if ($norm === '') continue;
+                $field = match (true) {
+                    str_contains($norm, 'stt') => 'stt',
+                    str_contains($norm, 'sokyhieu') => 'document_code',
+                    str_contains($norm, 'ngaythang') => 'document_date',
+                    str_contains($norm, 'trichyeu') || str_contains($norm, 'tenloai') => 'description',
+                    str_contains($norm, 'tacgia') || str_contains($norm, 'coquanban') => 'author',
+                    str_contains($norm, 'nguoiky') => 'signer',
+                    str_contains($norm, 'domat') => 'security_level',
+                    str_contains($norm, 'loaiban') => 'copy_type',
+                    str_contains($norm, 'trangso') => 'page_range',
+                    str_contains($norm, 'sotrang') => 'total_pages',
+                    str_contains($norm, 'tenkhoaban') || str_contains($norm, 'coquisoan') => 'issuing_agency',
+                    str_contains($norm, 'ghichu') => 'note',
+                    str_contains($norm, 'tenkhoabanngoai') => 'author_external',
+                    default => null,
+                };
+                if ($field !== null && ! isset($rowMap[$field])) {
+                    $rowMap[$field] = $c;
+                }
+            }
+            if (isset($rowMap['stt']) && (isset($rowMap['description']) || isset($rowMap['document_code']))) {
+                $headerRow = $r;
+                $columnMap = $rowMap;
+                break;
+            }
+        }
+
+        if ($headerRow === null) {
+            throw ValidationException::withMessages([
+                'file' => 'Không nhận diện được dòng tiêu đề. Vui lòng dùng đúng mẫu export từ hệ thống.',
+            ]);
+        }
+
+        $highestDataRow = $sheet->getHighestDataRow();
+        $createdIds = [];
+        $nextStt = $this->getNextDocumentSttForRecord((int) $record->id);
+        $emptyCount = 0;
+
+        for ($row = $headerRow + 1; $row <= $highestDataRow; $row++) {
+            $get = fn (?int $col) => $col ? trim((string) $sheet->getCell([$col, $row])->getFormattedValue()) : null;
+
+            $description = $get($columnMap['description'] ?? null) ?? '';
+            $documentCode = $get($columnMap['document_code'] ?? null);
+            $rawDate = $get($columnMap['document_date'] ?? null);
+
+            if ($description === '' && $documentCode === null && $rawDate === null) {
+                $emptyCount++;
+                if ($emptyCount >= 10) break;
+                continue;
+            }
+            $emptyCount = 0;
+
+            $rawStt = $get($columnMap['stt'] ?? null);
+            $stt = is_numeric($rawStt) ? (int) $rawStt : $nextStt;
+
+            // Parse page range like "10-20"
+            $rawPageRange = $get($columnMap['page_range'] ?? null);
+            [$pageFrom, $pageTo] = $this->extractDangImportPageRange($rawPageRange);
+
+            // Parse total pages
+            $rawTotal = $get($columnMap['total_pages'] ?? null);
+            $totalPages = is_numeric($rawTotal) ? (int) $rawTotal : null;
+
+            $datePayload = $this->normalizeDocumentDateFields($rawDate ?? '', false);
+
+            $document = Document::create([
+                'archive_record_id' => (int) $record->id,
+                'created_by' => $request->user()?->id,
+                'stt' => $stt,
+                'doc_type_id' => $defaultDocTypeId,
+                'document_code' => $documentCode,
+                'description' => $description ?: '',
+                'author' => $get($columnMap['author'] ?? null) ?? $get($columnMap['author_external'] ?? null),
+                'issuing_agency' => $get($columnMap['issuing_agency'] ?? null),
+                'signer' => $get($columnMap['signer'] ?? null),
+                'security_level' => $get($columnMap['security_level'] ?? null),
+                'copy_type' => $get($columnMap['copy_type'] ?? null),
+                'page_number_from' => $pageFrom,
+                'page_number_to' => $pageTo,
+                'total_pages' => $this->calculateTotalPages($pageFrom, $pageTo, $totalPages),
+                'note' => $get($columnMap['note'] ?? null),
+                'document_date' => $datePayload['document_date'],
+                'document_date_text' => $datePayload['document_date_text'],
+                'document_date_bracketed' => $datePayload['document_date_bracketed'],
+            ]);
+
+            $createdIds[] = $document->id;
+            $nextStt = max($nextStt, $stt) + 1;
+        }
+
+        if (empty($createdIds)) {
+            throw ValidationException::withMessages([
+                'file' => 'Không tìm thấy dòng dữ liệu hợp lệ để import.',
+            ]);
+        }
+
+        $createdRows = Document::query()
+            ->leftJoin('users', 'users.id', '=', 'documents.created_by')
+            ->whereIn('documents.id', $createdIds)
+            ->orderByRaw('COALESCE(documents.stt, 999999)')
+            ->orderBy('documents.id')
+            ->get($this->documentSelectColumns());
+
+        return response()->json([
+            'ok' => true,
+            'count' => count($createdIds),
+            'rows' => $createdRows,
+        ]);
+    }
+
+    private function normalizeGenericHeader(string $value): string
+    {
+        return Str::of($value)
+            ->ascii()
+            ->lower()
+            ->replace([' ', "\n", "\r", "\t", ',', '.', ':', ';', '-', '_', '/', '\\', '(', ')'], '')
+            ->toString();
+    }
+
+    private function buildGenericWorkbook(ArchiveRecord $record, \Illuminate\Database\Eloquent\Collection $documents, string $targetPath): void
+    {
+        $spreadsheet = new Spreadsheet();
+        $spreadsheet->getDefaultStyle()->getFont()->setName('Times New Roman')->setSize(12);
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle($this->makeSheetTitle($record->code ?? $record->reference_code));
+
+        // Title rows
+        $sheet->mergeCells('A1:M1');
+        $sheet->setCellValue('A1', 'DANH SÁCH TÀI LIỆU');
+        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(14);
+        $sheet->getStyle('A1')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+        $sheet->mergeCells('A2:M2');
+        $recordCode = trim((string) ($record->code ?? $record->reference_code ?? ''));
+        $sheet->setCellValue('A2', 'Hồ sơ: ' . $recordCode . ' - ' . ($record->title ?? ''));
+        $sheet->getStyle('A2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+
+        // Header row 4
+        $headers = [
+            'A4' => 'Số TT',
+            'B4' => 'Số, ký hiệu',
+            'C4' => 'Ngày tháng',
+            'D4' => 'Trích yếu nội dung',
+            'E4' => 'Tác giả / Cơ quan ban',
+            'F4' => 'Người ký',
+            'G4' => 'Độ mật',
+            'H4' => 'Loại bản',
+            'I4' => 'Trang số',
+            'J4' => 'Số trang',
+            'K4' => 'Tên kho bản ngoài / Cơ quan soạn',
+            'L4' => 'Ghi chú',
+            'M4' => 'Nhập bởi',
+        ];
+
+        foreach ($headers as $cell => $text) {
+            $sheet->setCellValue($cell, $text);
+        }
+
+        $sheet->getStyle('A4:M4')->getFont()->setBold(true);
+        $sheet->getStyle('A4:M4')->getAlignment()
+            ->setHorizontal(Alignment::HORIZONTAL_CENTER)
+            ->setVertical(Alignment::VERTICAL_CENTER)
+            ->setWrapText(true);
+        $sheet->getRowDimension(4)->setRowHeight(40);
+
+        $sheet->getColumnDimension('A')->setWidth(8);
+        $sheet->getColumnDimension('B')->setWidth(16);
+        $sheet->getColumnDimension('C')->setWidth(14);
+        $sheet->getColumnDimension('D')->setWidth(36);
+        $sheet->getColumnDimension('E')->setWidth(20);
+        $sheet->getColumnDimension('F')->setWidth(16);
+        $sheet->getColumnDimension('G')->setWidth(12);
+        $sheet->getColumnDimension('H')->setWidth(12);
+        $sheet->getColumnDimension('I')->setWidth(12);
+        $sheet->getColumnDimension('J')->setWidth(10);
+        $sheet->getColumnDimension('K')->setWidth(22);
+        $sheet->getColumnDimension('L')->setWidth(18);
+        $sheet->getColumnDimension('M')->setWidth(16);
+
+        $row = 5;
+        $serial = 1;
+        foreach ($documents as $doc) {
+            $pageFrom = trim((string) ($doc->page_number_from ?? ''));
+            $pageTo = trim((string) ($doc->page_number_to ?? ''));
+            if ($pageFrom !== '' && $pageTo !== '') {
+                $pageRange = "{$pageFrom}-{$pageTo}";
+            } elseif ($pageFrom !== '') {
+                $pageRange = "{$pageFrom}-{$pageFrom}";
+            } else {
+                $pageRange = trim((string) ($doc->page_number ?? ''));
+            }
+
+            $sheet->setCellValue("A{$row}", $serial);
+            $sheet->setCellValue("B{$row}", (string) ($doc->document_code ?? trim(($doc->document_number ?? '') . '/' . ($doc->document_symbol ?? ''), '/')));
+            $sheet->setCellValue("C{$row}", $this->formatDocumentDateForExport($doc));
+            $sheet->setCellValue("D{$row}", (string) ($doc->description ?? ''));
+            $sheet->setCellValue("E{$row}", (string) ($doc->author ?? ''));
+            $sheet->setCellValue("F{$row}", (string) ($doc->signer ?? ''));
+            $sheet->setCellValue("G{$row}", $this->formatSecurityLevelForExport($doc->security_level));
+            $sheet->setCellValue("H{$row}", (string) ($doc->copy_type ?? ''));
+            $sheet->setCellValue("I{$row}", $pageRange);
+            $sheet->setCellValue("J{$row}", $this->getDisplayPageCountForExport($doc));
+            $sheet->setCellValue("K{$row}", (string) ($doc->issuing_agency ?? ''));
+            $sheet->setCellValue("L{$row}", (string) ($doc->note ?? ''));
+            $sheet->setCellValue("M{$row}", '');
+            $row++;
+            $serial++;
+        }
+
+        $lastRow = max($row - 1, 8);
+        $sheet->getStyle("A4:M{$lastRow}")->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
+        $sheet->getStyle("D5:D{$lastRow}")->getAlignment()->setWrapText(true);
+        for ($r = 5; $r <= $lastRow; $r++) {
+            $sheet->getRowDimension($r)->setRowHeight(28);
+        }
+
+        (new Xlsx($spreadsheet))->save($targetPath);
+        $spreadsheet->disconnectWorksheets();
     }
 
     private function documentSelectColumns(): array
