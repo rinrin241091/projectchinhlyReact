@@ -703,15 +703,20 @@ class DocumentController extends Controller
 
     private function getDisplayPageCountForExport(Document $document): string|int
     {
+        if (is_numeric($document->total_pages)) {
+            return max(0, (int) $document->total_pages);
+        }
+
         $manualPageCount = trim((string) ($document->page_number ?? ''));
-        if ($manualPageCount !== '') {
-            return $manualPageCount;
+        $manualNumeric = $this->parseSheetNumber($manualPageCount);
+        if ($manualNumeric !== null) {
+            return $manualNumeric;
         }
 
         $computed = $this->calculateTotalPages(
             $document->page_number_from,
             $document->page_number_to,
-            $document->total_pages,
+            null,
         );
 
         return $computed ?? '';
